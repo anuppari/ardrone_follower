@@ -1,7 +1,0 @@
-<launch>
-  <include file="$(find bluefox2)/launch/single_node.launch" />
-  <node name="ardrone_follower" pkg="ardrone_follower" type="ardrone_follower" />
-  <node name="image_view" pkg="image_view" type="image_view" >
-    <remap from="image" to="mv_BF001066/image_raw" />
-  </node>
-</launch>

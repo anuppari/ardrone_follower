@@ -1,0 +1,26 @@
+%YAML:1.0
+image_width: 640
+image_height: 360
+square_size: 2.45e-02
+board_width: 8
+board_height: 6
+camera_name: ardrone_front
+camera_matrix: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [565.415227, 0, 340.515549, 0, 565.243039, 166.599999, 0, 0, 1]
+distortion_model: plumb_bob
+distortion_coefficients: !!opencv-matrix
+  rows: 1
+  cols: 5
+  dt: d
+  data: [-0.503659, 0.248026, 0.001141, 0.000354, 0]
+rectification_matrix: !!opencv-matrix
+  rows: 3
+  cols: 3
+  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+projection_matrix: !!opencv-matrix
+  rows: 3
+  cols: 4
+  data: [458.883545, 0, 349.468457, 0, 0, 532.399414, 164.784462, 0, 0, 0, 1, 0]

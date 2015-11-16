@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+
+import rospy
+import numpy as np
+from ardrone_autonomy.msg import Navdata
+from geometry_msgs.msg import PoseStamped, Twist
+from sensor_msgs.msg import Joy
+from std_msgs.msg import Empty
+import threading
+import quaternionFunctions as qf
+
+
+threshold = 0.5
+gainPose = 0.5
+gainImage = 0.5
+gainZ = 0.5
+
+def controller():
+    global velPub, launchPub, landPub, resetPub
+    global override, lastImageTime
+    
+    rospy.init_node('controller') # initialize node
+    override = False
+    lastImageTime = rospy.Time.now()
+    
+    poseSub = rospy.Subscriber('markers',PoseStamped,callback)
+    joySub = rospy.Subscriber('joy',Joy,joyCallback)
+    velPub = rospy.Publisher('cmd_vel',Twist,queue_size=1)
+    navSub = rospy.Subscriber('ardrone/navdata',Navdata,navCallback)
+    velPub.publish(Twist()) # zero out previous commands
+    launchPub = rospy.Publisher('ardrone/takeoff',Empty,queue_size=1)
+    landPub = rospy.Publisher('ardrone/land',Empty,queue_size=1)
+    resetPub = rospy.Publisher('ardrone/reset',Empty,queue_size=1)
+    
+    rospy.Timer(rospy.Duration(0.1),watchdog)
+    
+    rospy.spin()
+
+
+def watchdog(event):
+    nowTime = event.current_real.secs + event.current_real.nsecs/1e9
+    lastTime = lastImageTime.secs + lastImageTime.nsecs
+    
+    if nowTime - lastTime > 0.3:
+        velPub.publish(Twist())
+
+
+def navCallback(data):
+    global z
+    z = data.altd/1e3
+
+
+def joyCallback(data):
+    global override, joyVel
+    
+    if data.buttons[0]: #land
+        landPub.publish(Empty())
+    if data.buttons[3]: #takeoff
+        launchPub.publish(Empty())
+    if data.buttons[1]: #reset
+        resetPub.publish(Empty())
+    
+    if data.buttons[4] or data.buttons[5]: #override buttons
+        override = True
+    else:
+        override = False
+        velPub.publish(Twist())
+    
+    joyVel = Twist()
+    (joyVel.linear.x,joyVel.linear.y,joyVel.linear.z) = (deadband(data.axes[4]),deadband(data.axes[3]),deadband(data.axes[1]))
+    joyVel.angular.z = deadband(data.axes[0])
+    
+    if override:
+        velPub.publish(joyVel)
+
+
+def callback(data):
+    global lastImageTime
+    
+    lastImageTime = data.header.stamp
+    
+    if override:
+        velPub.publish(joyVel)
+    
+    else:
+        pd = np.array([[0,0,2]]).transpose() #desired position
+        
+        pos = data.pose.position # pose of marker w.r.t. camera
+        pos = np.transpose(np.array([[pos.x,pos.y,pos.z]]))
+        quat = np.array([[data.pose.orientation.w,data.pose.orientation.x,data.pose.orientation.y,data.pose.orientation.z]]).transpose()
+        pos = -1*qf.rotateVec(pos,qf.inverse(quat)) # position of camera w.r.t. marker
+        
+        error = pd - pos
+        velMsg = Twist()
+        if np.linalg.norm(error[0:2]) < threshold:
+            bearing = np.array([[data.pose.position.x,data.pose.position.y]]).transpose()/data.pose.position.z
+            vCmd = -gainImage*bearing
+            [[velMsg.linear.x],[velMsg.linear.y]] = vCmd.tolist()
+        else:
+            vd = gainPose*error
+            R = np.array([[0,-1,0],[-1,0,0],[0,0,-1]])
+            vCmd = np.dot(R,qf.rotateVec(vd,quat))
+            [[velMsg.linear.x],[velMsg.linear.y]] = vCmd[0:2].tolist()
+        
+        errorZ = pd[2] - z
+        velMsg.linear.z = gainZ*errorZ
+        #velMsg.linear.z = gainZ*error[2]
+        
+        velPub.publish(velMsg)
+
+def deadband(vel):
+    if np.absolute(vel) < 0.1:
+        outVel = 0.0
+    else:
+        outVel = vel
+    
+    return outVel
+
+
+if __name__ == '__main__':
+    try:
+        controller()
+    except rospy.ROSInterruptException:
+        pass

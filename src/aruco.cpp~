@@ -1,0 +1,152 @@
+#include <ros/ros.h>
+#include <image_transport/image_transport.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/image_encodings.h>
+#include <tf/transform_broadcaster.h>
+
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/calib3d/calib3d.hpp>
+#include <iostream>
+#include <stdio.h>
+#include <fstream>
+#include <sstream>
+#include <math.h>
+#include "aruco.h"
+#include "cvdrawingutils.h"
+
+using namespace aruco;
+using namespace cv;
+
+static const std::string OPENCV_WINDOW = "Image window";
+
+string TheIntrinsicFile;
+float TheMarkerSize=0.22;
+MarkerDetector MDetector;
+vector<Marker> TheMarkers;
+Mat TheInputImage;
+CameraParameters TheCameraParameters;
+Mat TheInputImageCopy;
+
+void rvec2quat(cv::Mat&, cv::Mat&);
+
+
+cv_bridge::CvImagePtr cv_ptr;
+
+// need a class in order publish in the callback
+class SubscribeAndPublish
+{
+    ros::NodeHandle n;
+    image_transport::ImageTransport it;
+    image_transport::Subscriber image_sub;
+    ros::Publisher markerPub;
+    tf::TransformBroadcaster tfBr;
+public:
+    SubscribeAndPublish() : it(n)
+    {
+        // marker pose publisher
+        markerPub = n.advertise<geometry_msgs::PoseStamped>("markers",10);
+        // image_sub = it.subscribe("/mv_BF001066/image_raw", 1, imageCb);
+        image_sub = it.subscribe("/ardrone/image_raw", 1, &SubscribeAndPublish::imageCb,this);
+    }
+
+    void imageCb(const sensor_msgs::ImageConstPtr& msg)
+    {
+        try
+        {
+            cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+        }
+        catch (cv_bridge::Exception& e)
+        {
+            ROS_ERROR("cv_bridge exception: %s", e.what());
+            return;
+        }
+        
+        try
+        {
+            //read image
+            TheInputImage = cv_ptr->image.clone();
+
+            //read camera parameters if passed
+	        //TheIntrinsicFile = "/home/ncr/ncr_ws/src/ROSOpenCV/out_camera_calibration.yml";
+	        TheIntrinsicFile = "/home/ncr/ncr_ws/src/ardrone_follower/cal.yml";
+            if (TheIntrinsicFile!="") {
+                TheCameraParameters.readFromXMLFile(TheIntrinsicFile);
+                TheCameraParameters.resize(TheInputImage.size());
+            }
+
+            //Detection of markers in the image passed
+            MDetector.detect(TheInputImage,TheMarkers,TheCameraParameters,TheMarkerSize);
+            
+            // print marker centers
+            for (unsigned int i=0;i<TheMarkers.size();i++) {
+                cv::Point2f cent = TheMarkers[i].getCenter();
+	            circle(TheInputImageCopy, cent, 3, CV_RGB(0,255,0));
+	            cout << endl << "Center: " << cent << endl;
+            }
+            
+            // generate pose message and tf broadcast
+            if (TheMarkers.size()!=0){
+                for (unsigned int i=0; i<TheMarkers.size(); i++) {
+                    cv::Mat quat(4,1,CV_32FC1);
+                    rvec2quat(TheMarkers[i].Rvec,quat);
+                    geometry_msgs::PoseStamped poseMsg;
+                    poseMsg.header.stamp = ros::Time::now();
+                    char buffer[10];
+                    sprintf(buffer,"%d",TheMarkers[i].id);
+                    poseMsg.header.frame_id = buffer;
+                    
+                    cv::Mat tvec = TheMarkers[i].Tvec;
+                    poseMsg.pose.position.x = tvec.at<float>(0,0);
+                    poseMsg.pose.position.y = tvec.at<float>(1,0);
+                    poseMsg.pose.position.z = tvec.at<float>(2,0);
+                    
+                    poseMsg.pose.orientation.w = quat.at<float>(0,0);
+                    poseMsg.pose.orientation.x = quat.at<float>(1,0);
+                    poseMsg.pose.orientation.y = quat.at<float>(2,0);
+                    poseMsg.pose.orientation.z = quat.at<float>(3,0);
+                    cout << poseMsg << endl;
+                    markerPub.publish(poseMsg);
+                    
+                    //tf
+                    tf::Quaternion q(quat.at<float>(1,0),quat.at<float>(2,0),quat.at<float>(3,0),quat.at<float>(0,0));
+                    tf::Vector3 vec(tvec.at<float>(0,0),tvec.at<float>(1,0),tvec.at<float>(2,0));
+                    tf::Transform transf(q,vec);
+                    char frameName[20];
+                    sprintf(frameName,"marker%d",TheMarkers[i].id);
+                    tfBr.sendTransform(tf::StampedTransform(transf,ros::Time::now(),"camera",frameName));
+                }
+            }
+
+        } catch (std::exception &ex)
+
+        {
+            cout<<"Exception :"<<ex.what()<<endl;
+        }
+    }
+
+
+};//End of class SubscribeAndPublish
+
+
+int main(int argc, char** argv)
+{
+    ros::init(argc, argv, "aruco");
+    
+    SubscribeAndPublish sap;
+    
+    ros::spin();
+    return 0;
+}
+
+void rvec2quat(cv::Mat &rvec, cv::Mat &quat)
+{
+    float theta = sqrt(pow(rvec.at<float>(0,0),2) + pow(rvec.at<float>(1,0),2) + pow(rvec.at<float>(2,0),2));
+    cv::Mat unit = rvec/theta;
+    quat.at<float>(0,0) = cos(theta/2);
+    quat.at<float>(1,0) = sin(theta/2)*unit.at<float>(0,0);
+    quat.at<float>(2,0) = sin(theta/2)*unit.at<float>(1,0);
+    quat.at<float>(3,0) = sin(theta/2)*unit.at<float>(2,0);
+}
+

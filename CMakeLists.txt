@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   sensor_msgs
   std_msgs
+  tf
 )
 
 ## System dependencies are found with CMake's conventions
@@ -109,16 +110,16 @@ include_directories(
 # )
 
 ## Declare a cpp executable
-# add_executable(ardrone_follower_node src/ardrone_follower_node.cpp)
+add_executable(bebop_control src/bebop_control.cpp)
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
-# add_dependencies(ardrone_follower_node ardrone_follower_generate_messages_cpp)
+add_dependencies(bebop_control ardrone_follower_generate_messages_cpp)
 
 ## Specify libraries to link a library or executable target against
-# target_link_libraries(ardrone_follower_node
-#   ${catkin_LIBRARIES}
-# )
+target_link_libraries(bebop_control
+  ${catkin_LIBRARIES}
+)
 
 #############
 ## Install ##

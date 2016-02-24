@@ -235,7 +235,7 @@ public:
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "image_processing_node");
+    ros::init(argc, argv, "bebop_control");
     
     bebop_control obj;
     

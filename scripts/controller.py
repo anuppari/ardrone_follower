@@ -18,7 +18,7 @@ leaderID = "ugv0"
 
 def controller():
     global velPub, launchPub, landPub, resetPub
-    global override, autonomy
+    global autonomy
     
     rospy.init_node('controller') # initialize node
     
@@ -41,8 +41,8 @@ def controller():
     while not rospy.is_shutdown():
         try:
             now = rospy.Time.now()
-            tfListener.waitForTransform("ardrone",leaderID,now,rospy.Duration(0.5))
-            (trans,quat) = tfListener.lookupTransform("ardrone",leaderID,now)
+            tfListener.waitForTransform("bebop",leaderID,now,rospy.Duration(0.5))
+            (trans,quat) = tfListener.lookupTransform("bebop",leaderID,now)
             
             desOrientVec = rotateVec(np.array([1,0,0]),quat)
             angVelVec = np.cross([1,0,0],desOrientVec)
@@ -57,7 +57,7 @@ def controller():
             lastTime = now
             lastTrans = trans
             
-            if autonomy and not override:
+            if autonomy:
                 velCmd = Twist()
                 (velCmd.linear.x,velCmd.linear.y,velCmd.linear.z) = linVelCmd
                 velCmd.angular.z = angVelCmd
@@ -72,7 +72,7 @@ def controller():
 
 
 def joyCallback(data):
-    global override, autonomy
+    global autonomy
     
     if data.buttons[0]: # A - land
         landPub.publish(Empty())
@@ -83,11 +83,11 @@ def joyCallback(data):
     
     autonomy = data.buttons[2] # X - autonomy
     
-    override = data.buttons[4] or data.buttons[5] # LB/RB - override buttons
-    if override: 
+    #override = data.buttons[4] or data.buttons[5] # LB/RB - override buttons
+    if not autonomy: 
         joyVel = Twist()
         (joyVel.linear.x,joyVel.linear.y,joyVel.linear.z) = (deadband(data.axes[4]),deadband(data.axes[3]),deadband(data.axes[1]))
-        joyVel.angular.z = deadband(data.axes[0])
+        joyVel.angular.z = -1*deadband(data.axes[0])
         velPub.publish(joyVel)
 
 

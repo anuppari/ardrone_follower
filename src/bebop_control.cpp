@@ -3,7 +3,7 @@
 #include <tf/transform_listener.h>
 #include <sensor_msgs/Joy.h>
 #include <std_msgs/Empty.h>
-#include <geometry_msgs/Pose.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
 
@@ -33,6 +33,8 @@ class bebop_control
     double kffAng;
     
     // States
+    bool mocapOn;
+    bool bodyVelOn;
     bool wallOverride;
     bool useHomog;
     bool useMocap;
@@ -63,11 +65,12 @@ public:
         kdLin = tf::Matrix3x3(0.01, 0, 0,
                               0, 0.01, 0,
                               0, 0, 0.01);
-        kdLin = tf::Matrix3x3(0.0573, 0, 0,
-                              0, 0.073, 0,
-                              0, 0, 0.98);
+        kffLin = tf::Matrix3x3(0.0573, 0, 0,
+                               0, 0.073, 0,
+                               0, 0, 0.98);
         
         // Initialize states
+        mocapOn = false;
         wallOverride = false;
         useHomog = false;
         useMocap = false;
@@ -81,12 +84,28 @@ public:
         joySub = nh.subscribe("joy",1,&bebop_control::joyCB,this);
         wallSub = nh.subscribe("bebop/pose",1,&bebop_control::wallCB,this);
         bodyVelSub = nh.subscribe("bebop/body_vel",1,&bebop_control::bodyVelCB,this);
-        mocapVelSub = nh.subscribe("bebop/body_vel",1,&bebop_control::mocapVelCB,this);
-        homogVelSub = nh.subscribe("bebop/body_vel",1,&bebop_control::homogVelCB,this);
+        mocapVelSub = nh.subscribe("desVelMocap",1,&bebop_control::mocapVelCB,this);
+        homogVelSub = nh.subscribe("desVelHomog",1,&bebop_control::homogVelCB,this);
+        
+        // Warning message
+        while (!(ros::isShuttingDown()) and (!mocapOn or !bodyVelOn))
+        {
+            if (!mocapOn) { std::cout << "BEBOP POSE NOT PUBLISHED! THE WALL IS DOWN!\nIs the mocap on?" << std::endl; }
+            if (!bodyVelOn) { std::cout << "BEBOP VELOCITY NOT PUBLISHED!\nIs velocity filter running?" << std::endl; }
+            ros::spinOnce();
+            ros::Duration(0.1).sleep();
+        }
     }
     
-    void wallCB(const geometry_msgs::Pose& poseMsg)
+    void wallCB(const geometry_msgs::PoseStamped& poseMsg)
     {
+        if (!mocapOn)
+        {
+            std::cout << "Bebop pose is publishing. THE WALL IS UP!" << std::endl;
+            mocapOn = true;
+        }
+        geometry_msgs::Pose pose = poseMsg.pose;
+        
         // Center
         tf::Vector3 center(0,0,0);
         try
@@ -110,12 +129,12 @@ public:
         tf::Vector3 boundaryTopRight = center + boundaryOffsetTopRight;
         
         // Exceeding wall
-        bool leftWall = poseMsg.position.x <= boundaryBottomLeft.getX();
-        bool rightWall = poseMsg.position.x >= boundaryTopRight.getX();
-        bool frontWall = poseMsg.position.y <= boundaryBottomLeft.getY();
-        bool backWall = poseMsg.position.y >= boundaryTopRight.getY();
-        bool bottomWall = poseMsg.position.z <= boundaryBottomLeft.getZ();
-        bool topWall = poseMsg.position.z >= boundaryTopRight.getZ();
+        bool leftWall = pose.position.x <= boundaryBottomLeft.getX();
+        bool rightWall = pose.position.x >= boundaryTopRight.getX();
+        bool frontWall = pose.position.y <= boundaryBottomLeft.getY();
+        bool backWall = pose.position.y >= boundaryTopRight.getY();
+        bool bottomWall = pose.position.z <= boundaryBottomLeft.getZ();
+        bool topWall = pose.position.z >= boundaryTopRight.getZ();
         
         if (leftWall or rightWall or frontWall or backWall or bottomWall or topWall)
         {
@@ -123,7 +142,7 @@ public:
             
             // velocity command
             tf::Vector3 velCmd(leftWall - rightWall, frontWall - backWall, bottomWall - topWall);
-            tf::Vector3 velCmdBody = tf::quatRotate(tf::Quaternion(poseMsg.orientation.x, poseMsg.orientation.y, poseMsg.orientation.z, poseMsg.orientation.w),velCmd);
+            tf::Vector3 velCmdBody = tf::quatRotate(tf::Quaternion(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w).inverse(),velCmd);
             
             // construct message and publish
             geometry_msgs::Twist twistMsg;
@@ -140,6 +159,12 @@ public:
     
     void bodyVelCB(const geometry_msgs::TwistStampedConstPtr& twist)
     {
+        if (!bodyVelOn)
+        {
+            std::cout << "Bebop velocity is publishing." << std::endl;
+            bodyVelOn = true;
+        }
+        
         // Measurements
         tf::Vector3 actualLinVel(twist->twist.linear.x,twist->twist.linear.y,twist->twist.linear.z);
         tf::Vector3 actualAngVel(twist->twist.angular.x,twist->twist.angular.y,twist->twist.angular.z);
@@ -158,15 +183,18 @@ public:
         tf::Vector3 linCMD = kpLin*linError + kdLin*linErrorDot + kffLin*actualLinVel;
         tf::Vector3 angCMD = kpAng*angError + kdAng*angErrorDot + kffAng*actualAngVel;
         
-        // Construct message and publish
-        geometry_msgs::Twist twistMsg;
-        twistMsg.linear.x = linCMD.getX();
-        twistMsg.linear.y = linCMD.getY();
-        twistMsg.linear.z = linCMD.getZ();
-        twistMsg.angular.x = angCMD.getX();
-        twistMsg.angular.y = angCMD.getY();
-        twistMsg.angular.z = angCMD.getZ();
-        velCmdPub.publish(twistMsg);
+        if (!wallOverride)
+        {
+            // Construct message and publish
+            geometry_msgs::Twist twistMsg;
+            twistMsg.linear.x = linCMD.getX();
+            twistMsg.linear.y = linCMD.getY();
+            twistMsg.linear.z = linCMD.getZ();
+            twistMsg.angular.x = angCMD.getX();
+            twistMsg.angular.y = angCMD.getY();
+            twistMsg.angular.z = angCMD.getZ();
+            velCmdPub.publish(twistMsg);
+        }
     }
     
     void joyCB(const sensor_msgs::JoyConstPtr& joyMsg)
@@ -177,28 +205,28 @@ public:
         {
             resetPub.publish(std_msgs::Empty());
         }
-        else if (joyMsg->buttons[1]) // a - land
+        else if (joyMsg->buttons[0]) // a - land
         {
             landPub.publish(std_msgs::Empty());
         }
-        else if (joyMsg->buttons[1]) // y - takeoff
+        else if (joyMsg->buttons[3]) // y - takeoff
         {
             takeoffPub.publish(std_msgs::Empty());
         }
         else if (!wallOverride)
         {
-            if (joyMsg->buttons[5]) // RB - use homog
+            if (joyMsg->buttons[4]) // LB - use homog
             {
                 useHomog = true;
             }
-            else if (joyMsg->buttons[4]) // LB - use mocap
+            else if (joyMsg->buttons[5]) // RB - use mocap
             {
                 useMocap = true;
             }
             else
             {
-                desLinVel = tf::Vector3(-1*joy_deadband(joyMsg->axes[0]), joy_deadband(-1*joyMsg->axes[1]), joy_deadband(joyMsg->axes[7]));
-                desAngVel = tf::Vector3(-1*joy_deadband(joyMsg->axes[4]), joy_deadband(joyMsg->axes[3]), joy_deadband(joyMsg->axes[2]-joyMsg->axes[5]));
+                desLinVel = tf::Vector3(-1*joy_deadband(joyMsg->axes[4]), joy_deadband(-1*joyMsg->axes[3]), joy_deadband(joyMsg->axes[1]));
+                desAngVel = tf::Vector3(0,0, joy_deadband(joyMsg->axes[0]));
             }
         }
     }

@@ -1,11 +1,29 @@
 <?xml version="1.0"?>
 
 <launch>
-  <group ns="bebop">
-      <node name="joy" pkg="joy" type="joy_node" >
-        <param name="dev" value="/dev/input/js1" />
-      </node>
-      <node name="controller" pkg="ardrone_follower" type="controller.py" />
-  </group>
+  <arg name="vision" default="false" />
+  
   <include file="$(find bebop_driver)/launch/bebop_node.launch"/>
+  <node name="joy" pkg="joy" type="joy_node" ns="bebop">
+    <param name="dev" value="/dev/input/js1" />
+  </node>
+  
+  <!-- <node name="controller" pkg="ardrone_follower" type="controller.py" /> -->
+  
+  <!-- Vision based stuff -->
+  <group if="$(arg vision)" >
+      <node pkg="tf" type="static_transform_publisher" name="image_broadcaster" args="0.0 0.0 0.0 0.0 0.0 0.0 1.0 world bebop 100" />
+      
+      <!-- Launch world to image pose publisher (i.e. publish pose messages for the corresponding tf) -->
+      <node pkg="robot_pose_publisher" type="robot_pose_publisher" name="robot_pose_publisher" output="screen" >
+        <param name="map_frame" value="world" />
+        <param name="base_frame" value="bebop" />
+        <param name="publish_frequency" value="100.0" />
+        <param name="is_stamped" value="true" />
+        <remap from="robot_pose" to="bebop/pose" />
+      </node>
+      
+      <include file="$(find aruco_ros)/launch/aruco.launch"/>
+      <include file="$(find bebop_gimbal_tf)/launch/bebop_gimbal_tf.launch"/>
+  </group>
 </launch>
